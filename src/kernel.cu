@@ -174,7 +174,8 @@ void Boids::initSimulation(int N) {
   checkCUDAErrorWithLine("kernGenerateRandomPosArray failed!");
 
   // LOOK-2.1 computing grid params
-  gridCellWidth = 2.0f * std::max(std::max(rule1Distance, rule2Distance), rule3Distance);
+  //gridCellWidth = std::max(std::max(rule1Distance, rule2Distance), rule3Distance); // need 27 grid check at most for velocity update
+  gridCellWidth = 2.0f * std::max(std::max(rule1Distance, rule2Distance), rule3Distance); // need 8 grid check at most for velocity update
   int halfSideCount = (int)(scene_scale / gridCellWidth) + 1;
   gridSideCount = 2 * halfSideCount;
 
@@ -442,9 +443,6 @@ __global__ void kernUpdateVelNeighborSearchScattered(
         return;
   // - Identify the grid cell that this particle is in
     glm::vec3 cellPos = (pos[index] - gridMin) * inverseCellWidth;
-    int gridX = cellPos.x;
-    int gridY = cellPos.y;
-    int gridZ = cellPos.z;
 
     glm::vec3 perceivedCenter(0.0f);
     glm::vec3 separation(0.0f);
@@ -455,11 +453,21 @@ __global__ void kernUpdateVelNeighborSearchScattered(
     int countRule3 = 0;
 
     glm::vec3 selfPos = pos[index];
+    float maxDistance = max(rule1Distance, max(rule2Distance, rule3Distance));
+    glm::vec3 minPos = (selfPos - glm::vec3(maxDistance) - gridMin) * inverseCellWidth;
+    glm::vec3 maxPos = (selfPos + glm::vec3(maxDistance) - gridMin) * inverseCellWidth;
+
+    int minX = floor(minPos.x);
+    int maxX = floor(maxPos.x);
+    int minY = floor(minPos.y);
+    int maxY = floor(maxPos.y);
+    int minZ = floor(minPos.z);
+    int maxZ = floor(maxPos.z);
 
   // - Identify which cells may contain neighbors. This isn't always 8.
-    for (int x = gridX - 1; x <= gridX + 1; x++) {
-        for (int y = gridY - 1; y <= gridY + 1; y++) {
-            for (int z = gridZ - 1; z <= gridZ + 1; z++) {
+    for (int z = minZ; z <= maxZ; z++) {
+        for (int y = minY; y <= maxY; y++) {
+            for (int x = minX; x <= maxX; x++) {
                 if (x < 0 || x >= gridResolution ||
                     y < 0 || y >= gridResolution ||
                     z < 0 || z >= gridResolution) {
