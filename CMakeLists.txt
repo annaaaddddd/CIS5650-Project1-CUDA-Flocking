@@ -56,6 +56,7 @@ set(headers
     src/kernel.h
     src/main.hpp
     src/utilityCore.hpp
+    src/benchmark.hpp
     )
 
 set(sources
@@ -63,6 +64,7 @@ set(sources
     src/kernel.cu
     src/main.cpp
     src/utilityCore.cpp
+    src/benchmark.cpp
     )
 
 list(SORT headers)

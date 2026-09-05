@@ -8,10 +8,14 @@
 
 #include "main.hpp"
 #include "kernel.h"
+#include "benchmark.hpp"
 
+#include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <sstream>
+#include <string>
 
 #include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
@@ -21,20 +25,53 @@
 // Configuration
 // ================
 
+// The defines below are the defaults. Every one of them can be overridden on
+// the command line so that a sweep script can walk the experiment matrix
+// without rebuilding:
+//
+//   cis5650_boids.exe --mode=scattered --n=5000 --block=128 --bench=stages
+//
+//   --mode=naive|scattered|coherent   which neighbor search to run
+//   --n=<int>                         number of boids
+//   --block=<int>                     CUDA block size
+//   --visualize=0|1                   render the boids
+//   --bench=none|fps|total|stages     what to measure
+//   --warmup=<int> --frames=<int>     measurement window
+//
+// With no arguments the program behaves exactly as the defines say.
+// Results are appended to benchmark_results.csv, with the config recorded in
+// every row, so a row can never be mislabelled.
+
 // LOOK-2.1 LOOK-2.3 - toggles for UNIFORM_GRID and COHERENT_GRID
-#define VISUALIZE 1
-#define UNIFORM_GRID 0
+#define VISUALIZE 0
+#define UNIFORM_GRID 1
 #define COHERENT_GRID 0
 
 // LOOK-1.2 - change this to adjust particle count in the simulation
-const int N_FOR_VIS = 5000;
+int N_FOR_VIS = 5000;
 const float DT = 0.2f;
+
+bool visualize = VISUALIZE;
+
+#if UNIFORM_GRID && COHERENT_GRID
+bench::SimMode simMode = bench::SimMode::Coherent;
+#elif UNIFORM_GRID
+bench::SimMode simMode = bench::SimMode::Scattered;
+#else
+bench::SimMode simMode = bench::SimMode::Naive;
+#endif
+
+static bool parseArgs(int argc, char* argv[]);
 
 /**
 * C main function.
 */
 int main(int argc, char* argv[]) {
   projectName = "5650 CUDA Intro: Boids";
+
+  if (!parseArgs(argc, argv)) {
+    return 1;
+  }
 
   if (init(argc, argv)) {
     mainLoop();
@@ -43,6 +80,57 @@ int main(int argc, char* argv[]) {
   } else {
     return 1;
   }
+}
+
+static bool parseArgs(int argc, char* argv[]) {
+  char text[64];
+  int number = 0;
+
+  for (int i = 1; i < argc; i++) {
+    if (sscanf(argv[i], "--n=%d", &number) == 1) {
+      N_FOR_VIS = number;
+    } else if (sscanf(argv[i], "--block=%d", &number) == 1) {
+      bench::config.blockSize = number;
+    } else if (sscanf(argv[i], "--visualize=%d", &number) == 1) {
+      visualize = (number != 0);
+    } else if (sscanf(argv[i], "--warmup=%d", &number) == 1) {
+      bench::config.warmup = number;
+    } else if (sscanf(argv[i], "--frames=%d", &number) == 1) {
+      bench::config.frames = number;
+    } else if (sscanf(argv[i], "--mode=%31s", text) == 1) {
+      if (!strcmp(text, "naive")) {
+        simMode = bench::SimMode::Naive;
+      } else if (!strcmp(text, "scattered")) {
+        simMode = bench::SimMode::Scattered;
+      } else if (!strcmp(text, "coherent")) {
+        simMode = bench::SimMode::Coherent;
+      } else {
+        std::cout << "Unknown --mode: " << text << std::endl;
+        return false;
+      }
+    } else if (sscanf(argv[i], "--bench=%31s", text) == 1) {
+      if (!strcmp(text, "none")) {
+        bench::config.mode = bench::Mode::None;
+      } else if (!strcmp(text, "fps")) {
+        bench::config.mode = bench::Mode::Fps;
+      } else if (!strcmp(text, "total")) {
+        bench::config.mode = bench::Mode::Total;
+      } else if (!strcmp(text, "stages")) {
+        bench::config.mode = bench::Mode::Stages;
+      } else {
+        std::cout << "Unknown --bench: " << text << std::endl;
+        return false;
+      }
+    } else {
+      std::cout << "Unknown argument: " << argv[i] << std::endl;
+      return false;
+    }
+  }
+
+  bench::config.simMode = simMode;
+  bench::config.numBoids = N_FOR_VIS;
+  bench::config.visualize = visualize;
+  return true;
 }
 
 //-------------------------------
@@ -98,6 +186,13 @@ bool init(int argc, char **argv) {
     return false;
   }
   glfwMakeContextCurrent(window);
+
+  // INSTRUCTION.md requires V-sync off for performance testing. Doing it here
+  // rather than only in the Nvidia Control Panel keeps the setting visible in
+  // the repo and reproducible on any machine. Only affects visualized runs;
+  // with visualization off we never call glfwSwapBuffers at all.
+  glfwSwapInterval(0);
+
   glfwSetKeyCallback(window, keyCallback);
   glfwSetCursorPosCallback(window, mousePositionCallback);
   glfwSetMouseButtonCallback(window, mouseButtonCallback);
@@ -110,14 +205,14 @@ bool init(int argc, char **argv) {
   // Initialize drawing state
   initVAO();
 
-  // Default to device ID 0. If you have more than one GPU and want to test a non-default one,
-  // change the device ID.
+  // Default to device ID 0.
   cudaGLSetGLDevice(0);
 
   cudaGLRegisterBufferObject(boidVBO_positions);
   cudaGLRegisterBufferObject(boidVBO_velocities);
 
   // Initialize N-body simulation
+  Boids::setBlockSize(bench::config.blockSize);
   Boids::initSimulation(N_FOR_VIS);
 
   updateCamera();
@@ -197,34 +292,44 @@ void initShaders(GLuint * program) {
     // No data is moved (Win & Linux). When mapped to CUDA, OpenGL should not
     // use this buffer
 
-    float4 *dptr = NULL;
     float *dptrVertPositions = NULL;
     float *dptrVertVelocities = NULL;
 
-    cudaGLMapBufferObject((void**)&dptrVertPositions, boidVBO_positions);
-    cudaGLMapBufferObject((void**)&dptrVertVelocities, boidVBO_velocities);
+    // INSTRUCTION.md defines "visualization off" as measuring the simulation
+    // only, so the GL interop map/unmap is skipped too -- otherwise every
+    // frame still pays for a driver round trip that has nothing to do with
+    // the simulation. (Deviation from the base repo; see README methodology.)
+    if (visualize) {
+      cudaGLMapBufferObject((void**)&dptrVertPositions, boidVBO_positions);
+      cudaGLMapBufferObject((void**)&dptrVertVelocities, boidVBO_velocities);
+    }
 
     // execute the kernel
-    #if UNIFORM_GRID && COHERENT_GRID
-    Boids::stepSimulationCoherentGrid(DT);
-    #elif UNIFORM_GRID
-    Boids::stepSimulationScatteredGrid(DT);
-    #else
-    Boids::stepSimulationNaive(DT);
-    #endif
+    bench::frameBegin();
+    switch (simMode) {
+      case bench::SimMode::Coherent:  Boids::stepSimulationCoherentGrid(DT); break;
+      case bench::SimMode::Scattered: Boids::stepSimulationScatteredGrid(DT); break;
+      case bench::SimMode::Naive:     Boids::stepSimulationNaive(DT); break;
+    }
+    bench::frameEnd();
 
-    #if VISUALIZE
-    Boids::copyBoidsToVBO(dptrVertPositions, dptrVertVelocities);
-    #endif
-    // unmap buffer object
-    cudaGLUnmapBufferObject(boidVBO_positions);
-    cudaGLUnmapBufferObject(boidVBO_velocities);
+    if (visualize) {
+      Boids::copyBoidsToVBO(dptrVertPositions, dptrVertVelocities);
+      cudaGLUnmapBufferObject(boidVBO_positions);
+      cudaGLUnmapBufferObject(boidVBO_velocities);
+    }
   }
 
   void mainLoop() {
     double fps = 0;
     double timebase = 0;
     int frame = 0;
+
+    // Wall-clock frame time, the "application FPS" the assignment asks about.
+    // Kept separate from the CUDA-event stage timers on purpose: --bench=fps
+    // runs carry no instrumentation at all.
+    static bench::Stage frameWall("frame_wall", false);
+    double lastFrameTime = glfwGetTime();
 
     Boids::unitTest(); // LOOK-1.2 We run some basic example code to make sure
                        // your CUDA development setup is ready to go.
@@ -239,32 +344,50 @@ void initShaders(GLuint * program) {
         fps = frame / (time - timebase);
         timebase = time;
         frame = 0;
+
+        // INSTRUCTION.md asks to read the framerate off the window title
+        // with visualization disabled, so the title is updated in both modes.
+        // `fps` only changes once per second, so updating the title here
+        // rather than every frame displays exactly the same thing without
+        // paying for a Win32 call on every iteration.
+        std::ostringstream ss;
+        ss << "[";
+        ss.precision(1);
+        ss << std::fixed << fps;
+        ss << " fps] " << deviceName;
+        glfwSetWindowTitle(window, ss.str().c_str());
       }
 
       runCUDA();
 
-      std::ostringstream ss;
-      ss << "[";
-      ss.precision(1);
-      ss << std::fixed << fps;
-      ss << " fps] " << deviceName;
-      glfwSetWindowTitle(window, ss.str().c_str());
+      if (visualize) {
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glUseProgram(program[PROG_BOID]);
+        glBindVertexArray(boidVAO);
+        glPointSize((GLfloat)pointSize);
+        glDrawElements(GL_POINTS, N_FOR_VIS + 1, GL_UNSIGNED_INT, 0);
+        glPointSize(1.0f);
 
-      #if VISUALIZE
-      glUseProgram(program[PROG_BOID]);
-      glBindVertexArray(boidVAO);
-      glPointSize((GLfloat)pointSize);
-      glDrawElements(GL_POINTS, N_FOR_VIS + 1, GL_UNSIGNED_INT, 0);
-      glPointSize(1.0f);
+        glUseProgram(0);
+        glBindVertexArray(0);
 
-      glUseProgram(0);
-      glBindVertexArray(0);
+        glfwSwapBuffers(window);
+      }
 
-      glfwSwapBuffers(window);
-      #endif
+      const double now = glfwGetTime();
+      bench::submitHostSample(frameWall, (float)((now - lastFrameTime) * 1000.0));
+      lastFrameTime = now;
+
+      // Exit once the measurement window is filled so a sweep script can move
+      // on to the next configuration.
+      if (bench::complete()) {
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+      }
     }
+
+    bench::report();
+
     glfwDestroyWindow(window);
     glfwTerminate();
   }
