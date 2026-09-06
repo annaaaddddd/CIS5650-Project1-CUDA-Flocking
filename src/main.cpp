@@ -34,6 +34,9 @@
 //   --mode=naive|scattered|coherent   which neighbor search to run
 //   --n=<int>                         number of boids
 //   --block=<int>                     CUDA block size
+//   --cellwidth=<float>               grid cell width as a multiple of the
+//                                     neighborhood radius: 2 searches 8 cells,
+//                                     1 searches 27
 //   --visualize=0|1                   render the boids
 //   --bench=none|fps|total|stages     what to measure
 //   --warmup=<int> --frames=<int>     measurement window
@@ -85,12 +88,15 @@ int main(int argc, char* argv[]) {
 static bool parseArgs(int argc, char* argv[]) {
   char text[64];
   int number = 0;
+  float decimal = 0.0f;
 
   for (int i = 1; i < argc; i++) {
     if (sscanf(argv[i], "--n=%d", &number) == 1) {
       N_FOR_VIS = number;
     } else if (sscanf(argv[i], "--block=%d", &number) == 1) {
       bench::config.blockSize = number;
+    } else if (sscanf(argv[i], "--cellwidth=%f", &decimal) == 1) {
+      bench::config.cellWidthScale = decimal;
     } else if (sscanf(argv[i], "--visualize=%d", &number) == 1) {
       visualize = (number != 0);
     } else if (sscanf(argv[i], "--warmup=%d", &number) == 1) {
@@ -213,6 +219,7 @@ bool init(int argc, char **argv) {
 
   // Initialize N-body simulation
   Boids::setBlockSize(bench::config.blockSize);
+  Boids::setCellWidthScale(bench::config.cellWidthScale);
   Boids::initSimulation(N_FOR_VIS);
 
   updateCamera();
@@ -328,7 +335,7 @@ void initShaders(GLuint * program) {
     // Wall-clock frame time, the "application FPS" the assignment asks about.
     // Kept separate from the CUDA-event stage timers on purpose: --bench=fps
     // runs carry no instrumentation at all.
-    static bench::Stage frameWall("frame_wall", false);
+    static bench::Stage frameWall("frame_wall");
     double lastFrameTime = glfwGetTime();
 
     Boids::unitTest(); // LOOK-1.2 We run some basic example code to make sure
@@ -374,6 +381,8 @@ void initShaders(GLuint * program) {
 
         glfwSwapBuffers(window);
       }
+
+      bench::frameFence();
 
       const double now = glfwGetTime();
       bench::submitHostSample(frameWall, (float)((now - lastFrameTime) * 1000.0));

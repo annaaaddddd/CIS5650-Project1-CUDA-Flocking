@@ -40,6 +40,7 @@ struct Config {
     SimMode simMode = SimMode::Naive;
     int numBoids = 5000;
     int blockSize = 128;
+    float cellWidthScale = 2.0f;
     bool visualize = false;
 };
 
@@ -83,10 +84,9 @@ struct GpuTimer {
 // One measured quantity. Constructing a Stage registers it, so declaring one
 // as a function-local static is enough to add it to the report.
 struct Stage {
-    explicit Stage(const char *label, bool gpuTimed = true);
+    explicit Stage(const char *label);
 
     const char *label;
-    bool gpuTimed;
     bool pending = false;    // timed during the frame currently in flight
     GpuTimer timer;
     std::vector<float> samples;
@@ -113,6 +113,15 @@ private:
 // CPU-GPU synchronization for the frame and then harvests every pending stage.
 void frameBegin();
 void frameEnd();
+
+
+// Wall-clock frame time only means anything if the frame has actually finished
+// on the GPU. Without this the CPU just fills the driver's launch queue and
+// races ahead, so the measured "frame time" is enqueue cost rather than
+// throughput -- naive at N=100000 measured 0.02 ms/frame that way, against a
+// real GPU step time of 30 ms. 
+// *Only fences in Fps mode*; the CUDA-event modes already synchronize in frameEnd.
+void frameFence();
 
 // Feed a host-measured sample (used for wall-clock frame time in Fps mode).
 void submitHostSample(Stage &stage, float ms);

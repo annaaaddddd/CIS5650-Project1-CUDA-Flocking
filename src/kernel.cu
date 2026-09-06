@@ -54,6 +54,11 @@ void checkCUDAError(const char *msg, int line = -1) {
  *  inside a kernel, so it does not need to be a compile-time constant. */
 int blockSize = 128;
 
+/*! Grid cell width as a multiple of the neighborhood radius. 2 means cells of
+ *  width 2R and at most 8 cells to search, 1 means width R and at most 27.
+ *  Runtime-settable via Boids::setCellWidthScale. */
+float cellWidthScale = 2.0f;
+
 // LOOK-1.2 Parameters for the boids algorithm.
 // These worked well in our reference implementation.
 #define rule1Distance 5.0f
@@ -158,6 +163,14 @@ void Boids::setBlockSize(int size) {
 }
 
 /**
+* Set the grid cell width as a multiple of the neighborhood radius. Must be
+* called before initSimulation, which is where the grid is laid out.
+*/
+void Boids::setCellWidthScale(float scale) {
+  cellWidthScale = scale;
+}
+
+/**
 * Initialize memory, update some globals
 */
 void Boids::initSimulation(int N) {
@@ -188,8 +201,10 @@ void Boids::initSimulation(int N) {
   checkCUDAErrorWithLine("kernGenerateRandomPosArray failed!");
 
   // LOOK-2.1 computing grid params
-  //gridCellWidth = std::max(std::max(rule1Distance, rule2Distance), rule3Distance); // need 27 grid check at most for velocity update
-  gridCellWidth = 2.0f * std::max(std::max(rule1Distance, rule2Distance), rule3Distance); // need 8 grid check at most for velocity update
+  // A scale of 2 gives cells of width 2R and at most 8 cells to check; a scale
+  // of 1 gives cells of width R and at most 27. The neighbor search derives its
+  // cell bounds from the search radius, so it handles either without changes.
+  gridCellWidth = cellWidthScale * std::max(std::max(rule1Distance, rule2Distance), rule3Distance);
   int halfSideCount = (int)(scene_scale / gridCellWidth) + 1;
   gridSideCount = 2 * halfSideCount;
 

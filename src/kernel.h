@@ -2,6 +2,7 @@
 
 namespace Boids {
     void setBlockSize(int size);
+    void setCellWidthScale(float scale);
     void initSimulation(int N);
     void stepSimulationNaive(float dt);
     void stepSimulationScatteredGrid(float dt);

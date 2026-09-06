@@ -95,7 +95,7 @@ void writeCsv() {
     }
 
     if (needHeader) {
-        out << "mode,n,block_size,visualize,stage,samples,"
+        out << "mode,n,block_size,cell_width_scale,visualize,stage,samples,"
                "mean_ms,median_ms,p95_ms,stddev_ms,min_ms,max_ms\n";
     }
 
@@ -108,6 +108,7 @@ void writeCsv() {
         out << simModeName(config.simMode) << ','
             << config.numBoids << ','
             << config.blockSize << ','
+            << config.cellWidthScale << ','
             << (config.visualize ? 1 : 0) << ','
             << stage->label << ','
             << s.samples << ','
@@ -171,8 +172,8 @@ float GpuTimer::elapsed() const {
     return ms;
 }
 
-Stage::Stage(const char *label, bool gpuTimed)
-    : label(label), gpuTimed(gpuTimed) {
+Stage::Stage(const char *label)
+    : label(label) {
     registry().push_back(this);
 }
 
@@ -190,6 +191,13 @@ StageScope::~StageScope() {
         stage_->pending = true;
         nvtxRangePop();
     }
+}
+
+void frameFence() {
+    if (config.mode != Mode::Fps) {
+        return;
+    }
+    cudaDeviceSynchronize();
 }
 
 void submitHostSample(Stage &stage, float ms) {
@@ -265,6 +273,7 @@ void report() {
     std::cout << "\n=== Benchmark: " << simModeName(config.simMode)
               << "  N=" << config.numBoids
               << "  blockSize=" << config.blockSize
+              << "  cellWidth=" << config.cellWidthScale << "R"
               << "  visualize=" << (config.visualize ? "on" : "off")
               << "  warmup=" << config.warmup
               << "  frames=" << g_collected << " ===\n";
