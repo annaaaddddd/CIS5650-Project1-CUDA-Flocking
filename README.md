@@ -775,15 +775,31 @@ block each block is a single warp, so 16 resident blocks means 16 resident warps
 out of 48, and occupancy is capped at 33% regardless of how many threads are
 waiting to run.
 
-I don't have a verified explanation for the penalty at 512 and 1024. Register
-pressure, tail effects and coarser load balancing would all produce this shape,
-and I haven't profiled these configurations to pinpoint down the exact factor.
+The large block sizes are less consistent than the table's bold makes them look.
+Scattered is the only one penalised at 512, and at 1024 it is joined by naive
+while coherent stays inside its own scatter. I don't have a verified explanation
+for any of them: register pressure, tail effects and coarser load balancing would
+all produce this shape, and I haven't profiled these configurations to pinpoint
+the exact factor.
 
-There's a limit to how much this experiment can say about the grid versions.
+There's also a limit to how much this experiment can say about the grid versions.
 `--block` only controls the kernels in `kernel.cu`, and `thrust::sort_by_key`
-picks its own launch configuration, so at N = 5000, where the sort is roughly
-half the step, this sweep is only moving half the work. Naive is the cleanest
-test here since all of its time is in a kernel I control.
+picks its own launch configuration, so part of the step is always out of reach.
+How much depends on N, since the sort is a nearly fixed cost while everything
+else grows:
+
+| N | sort share of the scattered step |
+| --- | --- |
+| 5000 | 51% |
+| 100000 | 23% |
+| 1000000 | 1% |
+
+> Source: `results/cell_width.csv`, `mode=scattered`, `cell_width_scale=2`, the
+> `scattered/sort` stage against the `total` row.
+
+So the N = 5000 panel only moves about half the work, the N = 100000 panel moves
+about three quarters of it, and naive is the cleanest test at either size since
+all of its time is in a kernel I control.
 
 ### Cell width: 8 cells against 27
 
