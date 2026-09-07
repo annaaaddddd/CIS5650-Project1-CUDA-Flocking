@@ -245,7 +245,10 @@ The `--bench` modes decide what gets recorded and how the program terminates:
 kernels by pipeline stage, so any trace meant for Nsight has to be captured with
 it.
 
-The base repo's `#define`s are still there as the defaults, so running with no arguments behaves exactly as before. 
+The base repo's `#define`s are still there as the defaults, so running with no
+arguments does whatever they say, exactly as it did before the flags existed.
+That is not the same as matching an unmodified base repo: the interop guard, the
+once-a-second title update and `glfwSwapInterval(0)` all still apply. 
 Results append to `benchmark_results.csv` with the configuration written into every row.
 
 Two of those flags reach into `kernel.cu`, through `Boids::setBlockSize` and `Boids::setCellWidthScale`. 
@@ -537,7 +540,13 @@ Naive gives every thread the whole population to walk, so per-thread work grows 
 Below saturation the extra threads land on SMs that had nothing to do, so the wall time only follows the per-thread work and grows with N. 
 Above saturation there is nowhere left to put them, so the wall time follows the total work and grows with N^2.
 
-So the bend tells me where this GPU fills up. It happens between 5x10^4 and 10^5 threads, and the card holds 84 SMs x 48 warps x 32 threads = 129,024 resident threads, which corresponds.
+So the bend tells me roughly where this GPU fills up. The card holds
+84 SMs × 48 warps × 32 threads = 129,024 resident threads, and the measured
+transition starts somewhere between 2×10⁴ and 5×10⁴ threads and is complete by
+10⁵, so it begins below full residency. That direction makes sense, since hiding
+latency needs enough warps rather than every warp slot filled. My N values step
+by 2× and 2.5× at a time, so this is an order-of-magnitude agreement and not a
+measurement of where saturation happens.
 
 The grid implementations show the same plateau in a milder form. Going from
 N = 1000 to N = 50000, a 50x increase, costs scattered only 3.3x and coherent
